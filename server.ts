@@ -6,8 +6,14 @@ import path from 'path';
 import fs from 'fs/promises';
 // @ts-ignore
 import steamTotp from 'steam-totp';
+// Add Supabase locally to verify tokens
+import { createClient } from '@supabase/supabase-js';
 
 const DATA_FILE = path.join(process.cwd(), 'data.json');
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');
 
 interface Account {
   name: string;
@@ -18,18 +24,18 @@ interface Account {
 let telegramBot: Telegraf | null = null;
 let telegramBotStatus: 'offline' | 'online' | 'error' = 'offline';
 
-// Helper functions for Database (JSON file based)
+// Helper functions for Database
 async function getAccounts(): Promise<Account[]> {
   try {
     const data = await fs.readFile(DATA_FILE, 'utf-8');
-    return JSON.parse(data).accounts || [];
+    return JSON.parse(data);
   } catch (err) {
     return [];
   }
 }
 
 async function saveAccounts(accounts: Account[]) {
-  await fs.writeFile(DATA_FILE, JSON.stringify({ accounts }, null, 2));
+  await fs.writeFile(DATA_FILE, JSON.stringify(accounts, null, 2));
 }
 
 async function startServer() {
@@ -39,16 +45,86 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // Simple Auth Middleware
-  const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const token = req.headers.authorization;
-    const expected = process.env.ADMIN_PASSWORD || 'admin';
-    if (token === `Bearer ${expected}`) {
+  // Simple Auth Middleware using Supabase
+  const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    try {
+      // Verify token with Supabase
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+
+      if (error || !user) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      
       next();
-    } else {
-      res.status(401).json({ error: 'Unauthorized' });
+    } catch (err) {
+      console.error("Supabase Auth Error:", err);
+      return res.status(403).json({ error: 'Forbidden', details: 'Failed to verify token' });
     }
   };
+
+  // --- API Routes ---
+
+  app.get('/api/status', (req, res) => {
+    res.json({
+        botStatus: telegramBotStatus,
+        hasToken: !!process.env.TELEGRAM_BOT_TOKEN
+    });
+  });
+
+  app.get('/api/accounts', requireAuth, async (req, res) => {
+     const accounts = await getAccounts();
+     
+     // Calculate current codes if 'auto'
+     const enrichedAccounts = accounts.map(acc => {
+        let currentCode = acc.value;
+        if (acc.type === 'auto') {
+          try {
+             currentCode = steamTotp.generateAuthCode(acc.value);
+          } catch(e) {
+             console.error("Error generating code for", acc.name, e);
+          }
+        }
+        return { ...acc, currentCode }
+     });
+
+     // Calculate time remaining for next 30s interval
+     const timeRemaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+     res.json({ accounts: enrichedAccounts, timeRemaining });
+  });
+
+  app.post('/api/accounts', requireAuth, async (req, res) => {
+     const { name, value, type } = req.body;
+     if (!name || !value) return res.status(400).json({ error: 'Missing name or value' });
+     
+     const accounts = await getAccounts();
+     const safeName = name.trim().replace(/\\s+/g, '_').toLowerCase(); // sanitize
+     
+     const existingIndex = accounts.findIndex(a => a.name === safeName);
+     if (existingIndex >= 0) {
+        accounts[existingIndex] = { name: safeName, value: value.trim(), type };
+     } else {
+        accounts.push({ name: safeName, value: value.trim(), type });
+     }
+     
+     await saveAccounts(accounts);
+     res.json({ success: true });
+  });
+
+  app.delete('/api/accounts/:name', requireAuth, async (req, res) => {
+     const { name } = req.params;
+     let accounts = await getAccounts();
+     accounts = accounts.filter(a => a.name !== name.toLowerCase());
+     await saveAccounts(accounts);
+     res.json({ success: true });
+  });
+
 
   // --- Initialize Telegram Bot ---
   const initTelegramBot = () => {
@@ -62,18 +138,19 @@ async function startServer() {
            const accounts = await getAccounts();
            const names = accounts.map(a => `\\/${a.name}`).join('\n');
            const msg = accounts.length > 0
-              ? `مرحباً! الحسابات المتوفرة بالمخدم حالياً:\n\n${names}\n\nأرسل الأمر الخاص بالحساب (مثال /ahmed) للحصول على كود ستيم جارد الخاص به.`
+              ? `مرحباً! الحسابات المتوفرة بالمخدم حالياً:\n\n${names}\n\nأرسل التوجيه الخاص بالحساب للحصول على كود ستيم جارد الخاص به.`
               : 'مرحباً! لا يوجد حسابات مسجلة بعد في قاعدة البيانات.';
+           
            ctx.reply(msg);
         });
 
-        // Listen to any text to check for account commands
+        // Listen to any text to check if it matches an account name
         telegramBot.on('text', async (ctx) => {
            const text = ctx.message.text.trim();
            if (!text.startsWith('/')) return;
            
-           const command = text.substring(1).toLowerCase(); // e.g., 'ahmed'
-           if (command === 'start') return;
+           const command = text.substring(1).toLowerCase();
+           if (command === 'start') return; // Handled above
 
            const accounts = await getAccounts();
            const account = accounts.find(a => a.name.toLowerCase() === command);
@@ -81,15 +158,15 @@ async function startServer() {
            if (account) {
              let codeStr = account.value;
              if (account.type === 'auto') {
-               try { 
-                 codeStr = steamTotp.generateAuthCode(account.value); 
-               } catch (e) { 
-                 return ctx.reply('حدث خطأ أثناء توليد الكود التلقائي لهذا الحساب. قد يكون المفتاح غير صالح.'); 
+               try {
+                 codeStr = steamTotp.generateAuthCode(account.value);
+               } catch (e) {
+                 return ctx.reply('حدث خطأ أثناء توليد الكود التلقائي لهذا الحساب. تأكد من صحة المفتاح (Shared Secret).');
                }
              }
              ctx.reply(`كود ستيم لحساب (${account.name}) هو: \n\n\`${codeStr}\``, { parse_mode: 'Markdown' });
            } else {
-             ctx.reply('لم يتم العثور على هذا الحساب في قاعدة البيانات.');
+             ctx.reply('لم يتم العثور على هذا الحساب بالتوجيه المذكور.');
            }
         });
 
@@ -101,71 +178,13 @@ async function startServer() {
         telegramBotStatus = 'error';
       }
     } else {
+      console.log('No TELEGRAM_BOT_TOKEN provided. Telegram features disabled.');
       telegramBotStatus = 'offline';
     }
   };
 
   initTelegramBot();
 
-  // API Routes: Login
-  app.post('/api/login', (req, res) => {
-    const { password } = req.body;
-    const expected = process.env.ADMIN_PASSWORD || 'admin';
-    if (password === expected) {
-      res.json({ success: true, token: expected });
-    } else {
-      res.status(401).json({ success: false, error: 'كلمة المرور خاطئة' });
-    }
-  });
-
-  // API Routes: Status
-  app.get('/api/status', (req, res) => {
-    res.json({
-        botStatus: telegramBotStatus,
-        hasToken: !!process.env.TELEGRAM_BOT_TOKEN
-    });
-  });
-
-  // API Routes: Manage Accounts
-  app.get('/api/accounts', requireAuth, async (req, res) => {
-     const accounts = await getAccounts();
-     const enriched = accounts.map(acc => {
-        let currentCode = acc.value;
-        if (acc.type === 'auto') {
-          try { currentCode = steamTotp.generateAuthCode(acc.value); } catch(e) {}
-        }
-        return {
-          ...acc,
-          currentCode
-        }
-     });
-     res.json({ accounts: enriched, timeRemaining: 30 - (Math.floor(Date.now() / 1000) % 30) });
-  });
-
-  app.post('/api/accounts', requireAuth, async (req, res) => {
-     const { name, value, type } = req.body;
-     if (!name || !value) return res.status(400).json({ error: 'Missing name or value' });
-     
-     const accounts = await getAccounts();
-     const safeName = name.trim().replace(/\\s+/g, '_').toLowerCase();
-     const index = accounts.findIndex(a => a.name === safeName);
-
-     if (index >= 0) {
-        accounts[index] = { name: safeName, value: value.trim(), type };
-     } else {
-        accounts.push({ name: safeName, value: value.trim(), type });
-     }
-     await saveAccounts(accounts);
-     res.json({ success: true });
-  });
-
-  app.delete('/api/accounts/:name', requireAuth, async (req, res) => {
-     const { name } = req.params;
-     let accounts = await getAccounts();
-     accounts = accounts.filter(a => a.name !== name.toLowerCase());
-     await saveAccounts(accounts);
-     res.json({ success: true });
-  });
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
@@ -186,13 +205,9 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
-  // Enable graceful stop for bots
-  process.once('SIGINT', () => {
-      telegramBot?.stop('SIGINT');
-  });
-  process.once('SIGTERM', () => {
-      telegramBot?.stop('SIGTERM');
-  });
+  // Graceful stop
+  process.once('SIGINT', () => telegramBot?.stop('SIGINT'));
+  process.once('SIGTERM', () => telegramBot?.stop('SIGTERM'));
 }
 
 startServer();

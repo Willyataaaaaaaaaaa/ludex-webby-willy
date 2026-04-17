@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Trash2, ShieldCheck, Gamepad2, AlertCircle, RefreshCw, Clock, Bot, Lock, LogIn, Plus, Users } from 'lucide-react';
+import { supabase, hasSupabaseConfig } from './lib/supabase';
 
 interface Account {
   name: string;
@@ -15,7 +16,8 @@ interface Status {
 
 export default function App() {
   // Auth State
-  const [authToken, setAuthToken] = useState<string | null>(localStorage.getItem('admin_token'));
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
@@ -30,12 +32,27 @@ export default function App() {
   const [newAccValue, setNewAccValue] = useState('');
   const [inputType, setInputType] = useState<'manual' | 'auto'>('auto');
 
+  // Load Initial Session using Supabase
+  useEffect(() => {
+    if (!hasSupabaseConfig) return;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthToken(session?.access_token ?? null);
+    }).catch(err => console.error("Supabase Session Error:", err));
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthToken(session?.access_token ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   // Fetch functions
   const fetchStatus = async () => {
     try {
       const res = await fetch('/api/status');
       if (res.ok) setStatus(await res.json());
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error('Failed to fetch status:', err); }
   };
 
   const fetchAccounts = async () => {
@@ -44,7 +61,7 @@ export default function App() {
       const res = await fetch('/api/accounts', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 403) {
         handleLogout();
         return;
       }
@@ -78,30 +95,36 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
     setLoading(true);
-    try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setAuthToken(data.token);
-        localStorage.setItem('admin_token', data.token);
-        setPassword('');
-      } else {
-        setLoginError(data.error || 'خطأ في تسجيل الدخول');
-      }
-    } catch (err) {
-      setLoginError('تعذر الاتصال بالخادم');
+    
+    if (!hasSupabaseConfig) {
+      setLoginError('قاعدة بيانات Supabase غير متصلة. يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في الإعدادات.');
+      setLoading(false);
+      return;
     }
+
+    try {
+      // Login using Supabase
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setLoginError(error.message === 'Invalid login credentials' ? 'البريد أو كلمة المرور غير صحيحة' : error.message);
+      } // Token comes automatically via onAuthStateChange
+    } catch (err: any) {
+      console.error(err);
+      setLoginError('فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت ومن إعدادات Supabase.');
+    }
+    
     setLoading(false);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (hasSupabaseConfig) {
+      await supabase.auth.signOut();
+    }
     setAuthToken(null);
-    localStorage.removeItem('admin_token');
-    setAccounts([]);
   };
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -154,38 +177,51 @@ export default function App() {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4" dir="rtl">
         <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-2xl">
           <div className="flex justify-center mb-6">
-            <div className="bg-blue-600 p-4 rounded-full shadow-lg shadow-blue-500/30">
+            <div className="bg-emerald-600 p-4 rounded-full shadow-lg shadow-emerald-500/30">
               <Lock className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-center text-white mb-2">تسجيل الدخول</h1>
-          <p className="text-slate-400 text-center mb-8 text-sm">أدخل كلمة المرور للوصول إلى لوحة تحكم الحسابات</p>
+          <h1 className="text-2xl font-bold text-center text-white mb-2">تسجيل الدخول (Supabase)</h1>
+          <p className="text-slate-400 text-center mb-8 text-sm">أدخل البريد وكلمة المرور للولوج للوحة الحسابات</p>
           
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <input
-                type="password"
-                placeholder="كلمة المرور (الموجودة في .env.example)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                type="email"
+                placeholder="البريد الإلكتروني"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 dir="ltr"
+                required
               />
             </div>
-            {loginError && <div className="text-red-400 text-sm text-center">{loginError}</div>}
+            <div>
+              <input
+                type="password"
+                placeholder="كلمة المرور"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                dir="ltr"
+                required
+              />
+            </div>
+            {loginError && <div className="text-red-400 text-sm text-center bg-red-500/10 py-2 rounded-lg">{loginError}</div>}
             <button
               type="submit"
-              disabled={loading || !password}
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition flex justify-center items-center space-x-2"
+              disabled={loading || !email || !password}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 rounded-xl transition flex justify-center items-center space-x-2 space-x-reverse"
             >
               <LogIn className="w-5 h-5 ml-2" />
-              <span>دخول</span>
+              <span>{loading ? 'جاري الدخول...' : 'تسجيل الدخول'}</span>
             </button>
           </form>
         </div>
       </div>
     );
   }
+
 
   // --- DASHBOARD SCREEN ---
   return (
