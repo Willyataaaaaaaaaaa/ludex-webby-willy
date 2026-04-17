@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Trash2, ShieldCheck, Gamepad2, AlertCircle, RefreshCw, Clock, Bot, Lock, LogIn, Plus, Users, User } from 'lucide-react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 interface Account {
   name: string;
@@ -210,7 +211,7 @@ export default function App() {
               className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition flex justify-center items-center space-x-2 space-x-reverse"
             >
               <LogIn className="w-5 h-5" />
-              <span>{loading ? 'جاري الدخول...' : 'تسجيل الدخول'}</span>
+              <span>{loading ? 'جاري ال��خول...' : 'تسجيل الدخول'}</span>
             </button>
           </form>
         </div>
@@ -398,6 +399,7 @@ export default function App() {
         </div>
 
       </div>
+      <SpeedInsights />
     </div>
   );
 }
