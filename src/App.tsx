@@ -85,7 +85,7 @@ export default function App() {
         setAuthToken(event.data.token);
         localStorage.setItem('admin_token', event.data.token);
       } else if (event.data?.type === 'OAUTH_AUTH_ERROR') {
-        setLoginError(event.data.error || 'Authentication failed');
+        setLoginError(`تفاصيل الخطأ من جوجل: ${event.data.error}`);
       }
     };
     window.addEventListener('message', handleMessage);
@@ -95,16 +95,20 @@ export default function App() {
   // Handlers
   const handleGoogleLogin = async () => {
     try {
+      setLoginError(''); // مسح الأخطاء
       const response = await fetch('/api/auth/google/url');
-      if (!response.ok) throw new Error('Failed to get Google Auth URL');
+      if (!response.ok) {
+         const errData = await response.json().catch(() => ({}));
+         throw new Error(errData.error || `خطأ في الخادم: ${response.status}`);
+      }
       const { url } = await response.json();
       const authWindow = window.open(url, 'google_oauth_popup', 'width=600,height=700');
       if (!authWindow) {
-        alert('Please allow popups for this site to connect with Google.');
+        setLoginError('تم حظر النافذة المنبثقة! يرجى السماح بالنوافذ المنبثقة (Pop-ups) لهذا الموقع من إعدادات المتصفح.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setLoginError('فشل الاتصال بالخادم لجلب رابط جوجل');
+      setLoginError(`يوجد مشكلة: ${err.message}`);
     }
   };
 

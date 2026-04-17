@@ -73,6 +73,9 @@ async function startServer() {
   const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
   app.get('/api/auth/google/url', (req, res) => {
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ error: 'مفتاح GOOGLE_CLIENT_ID مفقود! لم تقم بإضافته في الأسرار (Secrets).' });
+    }
     const origin = req.headers.origin || req.headers.referer || `https://${req.headers.host}`;
     const redirectUri = `${origin.replace(/\/$/, '')}/api/auth/google/callback`;
     
@@ -90,6 +93,17 @@ async function startServer() {
 
   app.get(['/api/auth/google/callback', '/api/auth/google/callback/'], async (req, res) => {
     const { code } = req.query;
+
+    if (!GOOGLE_CLIENT_SECRET) {
+      return res.send(`
+        <html><body><script>
+          if (window.opener) {
+            window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: 'مفتاح GOOGLE_CLIENT_SECRET مفقود من الأسرار' }, '*');
+            window.close();
+          }
+        </script></body></html>
+      `);
+    }
     
     // We get the origin from the request or provide a fallback. In an iframe, referer might be useful if origin is null.
     // However, for proxy setups, we will pass the redirect_uri that was used.
