@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "Steam Guard Bot Admin",
+  "description": "لوحة تحكم احترافية لإدارة حسابات ستيم جارد وتوليد الأكواد تلقائياً مع ربط ببوت تليجرام للإشعارات والأوامر.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

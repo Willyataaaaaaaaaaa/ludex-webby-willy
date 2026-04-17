@@ -4,6 +4,7 @@ import { Telegraf } from 'telegraf';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs/promises';
+import jwt from 'jsonwebtoken';
 // @ts-ignore
 import steamTotp from 'steam-totp';
 
@@ -52,13 +53,117 @@ async function startServer() {
     const expectedToken = Buffer.from(`${expectedUser}:${expectedPass}`).toString('base64');
     
     if (token === expectedToken) {
-      next();
-    } else {
-      res.status(403).json({ error: 'Forbidden' });
+      return next();
+    }
+    
+    const jwtSecret = process.env.JWT_SECRET || 'super-secret-key';
+    try {
+       jwt.verify(token, jwtSecret);
+       return next();
+    } catch(err) {
+       return res.status(403).json({ error: 'Forbidden' });
     }
   };
 
   // --- API Routes ---
+
+  // Google OAuth Endpoints
+  const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+  const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+
+  app.get('/api/auth/google/url', (req, res) => {
+    const origin = req.headers.origin || req.headers.referer || `https://${req.headers.host}`;
+    const redirectUri = `${origin.replace(/\/$/, '')}/api/auth/google/callback`;
+    
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID || '',
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'email profile',
+      access_type: 'offline',
+      prompt: 'consent'
+    });
+
+    res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
+  });
+
+  app.get(['/api/auth/google/callback', '/api/auth/google/callback/'], async (req, res) => {
+    const { code } = req.query;
+    
+    // We get the origin from the request or provide a fallback. In an iframe, referer might be useful if origin is null.
+    // However, for proxy setups, we will pass the redirect_uri that was used.
+    // The exact redirect_uri must match. Best is to use the host.
+    const redirectUri = `https://${req.get('host')}/api/auth/google/callback`;
+
+    try {
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+          code: code as string,
+          client_id: GOOGLE_CLIENT_ID || '',
+          client_secret: GOOGLE_CLIENT_SECRET || '',
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code'
+        })
+      });
+
+      const tokenData = await tokenRes.json();
+      
+      if (!tokenData.id_token) {
+         throw new Error('No id_token received');
+      }
+
+      // decode the id_token to get email
+      const decoded = jwt.decode(tokenData.id_token) as any;
+      
+      if (!decoded || !decoded.email) {
+         throw new Error('Could not decode email');
+      }
+
+      if (ADMIN_EMAIL && decoded.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+         throw new Error('Unauthorized email');
+      }
+
+      // Generate app token
+      const jwtSecret = process.env.JWT_SECRET || 'super-secret-key';
+      const appToken = jwt.sign({ email: decoded.email }, jwtSecret, { expiresIn: '7d' });
+
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', token: '${appToken}' }, '*');
+                window.close();
+              } else {
+                window.location.href = '/';
+              }
+            </script>
+            <p>Authentication successful. You can close this window.</p>
+          </body>
+        </html>
+      `);
+    } catch(err: any) {
+      console.error(err);
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: '${err.message}' }, '*');
+                window.close();
+              }
+            </script>
+            <p>Authentication failed: ${err.message}</p>
+          </body>
+        </html>
+      `);
+    }
+  });
 
   // Login Endpoint
   app.post('/api/login', (req, res) => {
