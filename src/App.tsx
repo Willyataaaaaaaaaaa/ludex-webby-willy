@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Trash2, ShieldCheck, Gamepad2, AlertCircle, RefreshCw, Clock, Bot, Lock, LogIn, Plus, Users } from 'lucide-react';
-import { supabase, hasSupabaseConfig } from './lib/supabase';
+import { Send, Trash2, ShieldCheck, Gamepad2, AlertCircle, RefreshCw, Clock, Bot, Lock, LogIn, Plus, Users, User } from 'lucide-react';
 
 interface Account {
   name: string;
@@ -16,8 +15,8 @@ interface Status {
 
 export default function App() {
   // Auth State
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [email, setEmail] = useState('');
+  const [authToken, setAuthToken] = useState<string | null>(localStorage.getItem('admin_token'));
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
 
@@ -31,21 +30,6 @@ export default function App() {
   const [newAccName, setNewAccName] = useState('');
   const [newAccValue, setNewAccValue] = useState('');
   const [inputType, setInputType] = useState<'manual' | 'auto'>('auto');
-
-  // Load Initial Session using Supabase
-  useEffect(() => {
-    if (!hasSupabaseConfig) return;
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthToken(session?.access_token ?? null);
-    }).catch(err => console.error("Supabase Session Error:", err));
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthToken(session?.access_token ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   // Fetch functions
   const fetchStatus = async () => {
@@ -96,35 +80,37 @@ export default function App() {
     setLoginError('');
     setLoading(true);
     
-    if (!hasSupabaseConfig) {
-      setLoginError('قاعدة بيانات Supabase غير متصلة. يرجى إضافة SUPABASE_URL و SUPABASE_ANON_KEY في الإعدادات.');
-      setLoading(false);
-      return;
-    }
-
     try {
-      // Login using Supabase
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
       });
+      
+      const data = await res.json();
 
-      if (error) {
-        setLoginError(error.message === 'Invalid login credentials' ? 'البريد أو كلمة المرور غير صحيحة' : error.message);
-      } // Token comes automatically via onAuthStateChange
+      if (res.ok && data.success) {
+        setAuthToken(data.token);
+        localStorage.setItem('admin_token', data.token);
+        setUsername('');
+        setPassword('');
+      } else {
+        setLoginError(data.error || 'اسم المستخدم أو كلمة المرور غير صحيحة');
+      }
     } catch (err: any) {
       console.error(err);
-      setLoginError('فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت ومن إعدادات Supabase.');
+      setLoginError('فشل الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.');
     }
     
     setLoading(false);
   };
 
-  const handleLogout = async () => {
-    if (hasSupabaseConfig) {
-      await supabase.auth.signOut();
-    }
+  const handleLogout = () => {
     setAuthToken(null);
+    localStorage.removeItem('admin_token');
+    setAccounts([]);
   };
 
   const handleAddAccount = async (e: React.FormEvent) => {
@@ -177,43 +163,53 @@ export default function App() {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4" dir="rtl">
         <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-2xl">
           <div className="flex justify-center mb-6">
-            <div className="bg-emerald-600 p-4 rounded-full shadow-lg shadow-emerald-500/30">
+            <div className="bg-blue-600 p-4 rounded-full shadow-lg shadow-blue-500/30">
               <Lock className="w-8 h-8 text-white" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-center text-white mb-2">تسجيل الدخول (Supabase)</h1>
-          <p className="text-slate-400 text-center mb-8 text-sm">أدخل البريد وكلمة المرور للولوج للوحة الحسابات</p>
+          <h1 className="text-2xl font-bold text-center text-white mb-2">تسجيل الدخول</h1>
+          <p className="text-slate-400 text-center mb-8 text-sm">أدخل اسم المستخدم وكلمة المرور للوصول إلى لوحة تحكم الحسابات</p>
           
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <input
-                type="email"
-                placeholder="البريد الإلكتروني"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                dir="ltr"
-                required
-              />
+              <div className="relative">
+                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
+                  <User className="w-5 h-5" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="اسم المستخدم"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 pr-10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  dir="ltr"
+                  required
+                />
+              </div>
             </div>
             <div>
-              <input
-                type="password"
-                placeholder="كلمة المرور"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                dir="ltr"
-                required
-              />
+              <div className="relative">
+                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-400">
+                   <Lock className="w-5 h-5" />
+                </div>
+                <input
+                  type="password"
+                  placeholder="كلمة المرور"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 pr-10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  dir="ltr"
+                  required
+                />
+              </div>
             </div>
             {loginError && <div className="text-red-400 text-sm text-center bg-red-500/10 py-2 rounded-lg">{loginError}</div>}
             <button
               type="submit"
-              disabled={loading || !email || !password}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 rounded-xl transition flex justify-center items-center space-x-2 space-x-reverse"
+              disabled={loading || !username || !password}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-xl transition flex justify-center items-center space-x-2 space-x-reverse"
             >
-              <LogIn className="w-5 h-5 ml-2" />
+              <LogIn className="w-5 h-5" />
               <span>{loading ? 'جاري الدخول...' : 'تسجيل الدخول'}</span>
             </button>
           </form>

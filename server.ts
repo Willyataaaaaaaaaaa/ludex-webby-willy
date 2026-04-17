@@ -6,14 +6,8 @@ import path from 'path';
 import fs from 'fs/promises';
 // @ts-ignore
 import steamTotp from 'steam-totp';
-// Add Supabase locally to verify tokens
-import { createClient } from '@supabase/supabase-js';
 
 const DATA_FILE = path.join(process.cwd(), 'data.json');
-
-const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseAnonKey || 'placeholder');
 
 interface Account {
   name: string;
@@ -45,31 +39,40 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // Simple Auth Middleware using Supabase
-  const requireAuth = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Simple Auth Middleware
+  const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     
     const token = authHeader.split(' ')[1];
+    const expectedUser = process.env.ADMIN_USERNAME || 'admin';
+    const expectedPass = process.env.ADMIN_PASSWORD || 'admin';
+    const expectedToken = Buffer.from(`${expectedUser}:${expectedPass}`).toString('base64');
     
-    try {
-      // Verify token with Supabase
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-
-      if (error || !user) {
-        return res.status(403).json({ error: 'Forbidden' });
-      }
-      
+    if (token === expectedToken) {
       next();
-    } catch (err) {
-      console.error("Supabase Auth Error:", err);
-      return res.status(403).json({ error: 'Forbidden', details: 'Failed to verify token' });
+    } else {
+      res.status(403).json({ error: 'Forbidden' });
     }
   };
 
   // --- API Routes ---
+
+  // Login Endpoint
+  app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    const expectedUser = process.env.ADMIN_USERNAME || 'admin';
+    const expectedPass = process.env.ADMIN_PASSWORD || 'admin';
+    
+    if (username === expectedUser && password === expectedPass) {
+       const token = Buffer.from(`${expectedUser}:${expectedPass}`).toString('base64');
+       res.json({ success: true, token });
+    } else {
+       res.status(401).json({ success: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
+    }
+  });
 
   app.get('/api/status', (req, res) => {
     res.json({
