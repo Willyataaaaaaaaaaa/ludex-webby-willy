@@ -68,11 +68,11 @@ async function startServer() {
   // --- API Routes ---
 
   // Google OAuth Endpoints
-  const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-  const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-
   app.get('/api/auth/google/url', (req, res) => {
+    // Prevent caching 404s or stale URLs
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+
     if (!GOOGLE_CLIENT_ID) {
       return res.status(500).json({ error: 'مفتاح GOOGLE_CLIENT_ID مفقود! لم تقم بإضافته في الأسرار (Secrets).' });
     }
@@ -93,6 +93,9 @@ async function startServer() {
 
   app.get(['/api/auth/google/callback', '/api/auth/google/callback/'], async (req, res) => {
     const { code } = req.query;
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+    const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
     if (!GOOGLE_CLIENT_SECRET) {
       return res.send(`

@@ -96,7 +96,7 @@ export default function App() {
   const handleGoogleLogin = async () => {
     try {
       setLoginError(''); // مسح الأخطاء
-      const response = await fetch('/api/auth/google/url');
+      const response = await fetch(`/api/auth/google/url?t=${Date.now()}`);
       if (!response.ok) {
          const errData = await response.json().catch(() => ({}));
          throw new Error(errData.error || `خطأ في الخادم: ${response.status}`);
